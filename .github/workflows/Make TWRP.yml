@@ -1,0 +1,93 @@
+name: Make TWRP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - name: Remove Useless Package
+      run: |
+        docker rmi `docker images -q`
+        sudo rm -rf /usr/share/dotnet /etc/mysql /etc/php /etc/sudo apt/sources.list.d
+        sudo apt -y purge azure-cli ghc* zulu* llvm* firefox google* dotnet* powershell openjdk* mysql* php*
+        sudo apt -y autoremove --purge
+        sudo apt -y autoclean
+        sudo apt clean
+
+    - name: Free Disk Space Before Build
+      run: |
+        echo "Disk space before cleanup:"
+        df -h
+        sudo rm -rf /usr/local/.ghcup
+        sudo rm -rf /opt/hostedtoolcache/CodeQL
+        sudo rm -rf /usr/local/lib/android/sdk/ndk
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/share/boost
+        echo "Disk space after cleanup:"
+        df -h
+
+    - name: Maximize Build Space
+      uses: easimon/maximize-build-space@master
+      with:
+        root-reserve-mb: 4096
+        swap-size-mb: 8192
+        remove-dotnet: 'true'
+        remove-android: 'true'
+        remove-haskell: 'true'
+        remove-codeql: 'true'
+        remove-docker-images: 'true'
+
+    - name: Check Out
+      uses: actions/checkout@main
+
+    - name: Set Variables
+      run: echo "{name}=date::$(date +%F)" >> $GITHUB_OUTPUT
+
+    - name: Prepare Environment
+      run: |
+        df -h
+        export HOME=${GITHUB_WORKSPACE}
+        cd ${GITHUB_WORKSPACE}
+        sudo apt -y install git aria2
+        git clone https://gitlab.com/OrangeFox/misc/scripts
+        df -h
+        cd scripts
+        sudo bash setup/android_build_env.sh
+        df -h
+        sudo bash setup/install_android_sdk.sh || true
+
+    - name: Init Repo
+      run: |
+        mkdir ${GITHUB_WORKSPACE}/workspace
+        cd ${GITHUB_WORKSPACE}/workspace
+        git config --global user.name "Build-Bot"
+        git config --global user.email "build@ci.local"
+        repo init --depth=1 -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git -b twrp-14.1
+
+    - name: Repo Sync
+      run: |
+        cd ${GITHUB_WORKSPACE}/workspace
+        repo sync -j$(nproc --all)
+        ls -al
+
+    - name: Clone Device Tree
+      run: |
+        cd ${GITHUB_WORKSPACE}/workspace
+        git clone https://github.com/${{ github.repository }}.git -b main ./device/xiaomi/lapis
+
+    - name: Building
+      run: |
+        cd ${GITHUB_WORKSPACE}/workspace
+        source build/envsetup.sh
+        lunch twrp_lapis-eng
+        mka vendorbootimage -j$(nproc --all)
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: lapis_twrp
+        path: workspace/out/target/product/lapis/vendor_boot.img
